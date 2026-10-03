@@ -1,0 +1,59 @@
+name: Compile Check
+
+# 仅用于个人 fork 的编译校验，不要带进给上游的 PR。
+#
+# 背景：上游仓库没有任何 push / PR 触发的 CI（publish.yml 等全部是 workflow_dispatch），
+# 所以提交 PR 之后不会有任何机器告诉你代码编不编得过。这个文件用来补上这一点，
+# 让编译校验完全在 GitHub 的 runner 上完成，本地不需要 restore 任何 NuGet 包。
+#
+# 放置位置：自己 fork 的 main 分支。
+#   - GitHub Actions 处理 push 事件时，用的是「被推送的那个 ref」里的 workflow 文件，
+#     所以把文件放进 feature 分支会让它混进给上游的 PR。
+#   - 放在 main 上，用下面两种方式触发，feature 分支就能保持干净。
+#
+# 用法：
+#   1) 自动：把 feature 分支推到自己的 fork，然后对「自己的 fork」开 PR（base = main）。
+#      main 上的这份 workflow 会去编译该 PR 的合并结果。
+#   2) 手动：Actions → Compile Check → Run workflow，ref 填要编译的分支 / tag / commit。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要编译的分支 / tag / commit（留空则用触发时的 ref）'
+        required: false
+        type: string
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: compile-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # 默认只编译主程序，会连带编译三个 Fischless.* 子项目（ProjectReference）。
+      # 这样能避开 Test/BetterGenshinImpact.UnitTest 的 TorchSharp（会拉 libtorch，首次 restore 非常慢）。
+      # 如果要连测试项目一起验证，把下面的 run 换成：
+      #   dotnet build BetterGenshinImpact.sln -c Debug
+      - name: Build
+        run: dotnet build BetterGenshinImpact/BetterGenshinImpact.csproj -c Debug -p:Platform=x64
