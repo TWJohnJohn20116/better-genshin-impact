@@ -17,9 +17,6 @@ namespace BetterGenshinImpact.Service.ChildSession;
 /// </summary>
 internal static class ChildSessionEnvironmentCheck
 {
-    private const string CurrentVersionRegistryPath =
-        @"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-
     private const string PasswordLessRegistryPath =
         @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device";
 
@@ -39,32 +36,8 @@ internal static class ChildSessionEnvironmentCheck
     /// </summary>
     private const int PasswordLessHelloOnlyValue = 2;
 
-    /// <summary>
-    /// 家庭版（Core 系列）的 EditionID。
-    /// Windows 10/11 上属于家庭版的取值只有这四个，官方文档要求桌面分身运行在非家庭版系统上。
-    /// 注意不能依赖 ProductName：Windows 11 上它仍然写着「Windows 10 Home」。
-    /// </summary>
-    private static readonly HashSet<string> HomeEditionIds =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            "Core",
-            "CoreN",
-            "CoreSingleLanguage",
-            "CoreCountrySpecific",
-        };
-
-    /// <summary>问题的严重程度。</summary>
-    internal enum Severity
-    {
-        /// <summary>已知会导致桌面分身无法建立会话。</summary>
-        Blocking,
-
-        /// <summary>可能导致登录失败，但不一定阻止会话建立。</summary>
-        Warning,
-    }
-
     /// <summary>一条环境检查结论。</summary>
-    internal sealed record Issue(Severity Severity, string Title, string Message);
+    internal sealed record Issue(string Title, string Message);
 
     /// <summary>
     /// 收集当前系统的环境结论。读取失败（键或值不存在、无权限）时跳过该项，不抛异常。
@@ -72,24 +45,9 @@ internal static class ChildSessionEnvironmentCheck
     internal static IReadOnlyList<Issue> Collect()
     {
         var issues = new List<Issue>();
-        CollectEditionIssue(issues);
         CollectRdpHostIssue(issues);
         CollectPasswordLessIssue(issues);
         return issues;
-    }
-
-    /// <summary>是否存在已知会阻止会话建立的问题。</summary>
-    internal static bool HasBlockingIssue(IReadOnlyList<Issue> issues)
-    {
-        foreach (var issue in issues)
-        {
-            if (issue.Severity == Severity.Blocking)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /// <summary>把结论格式化成可直接展示给用户的文本。</summary>
@@ -116,34 +74,10 @@ internal static class ChildSessionEnvironmentCheck
     }
 
     /// <summary>
-    /// 检查系统版本是否为家庭版。
-    /// </summary>
-    private static void CollectEditionIssue(List<Issue> issues)
-    {
-        var editionId = ReadString(RegistryHive.LocalMachine, CurrentVersionRegistryPath, "EditionID");
-        if (string.IsNullOrEmpty(editionId) || !HomeEditionIds.Contains(editionId))
-        {
-            return;
-        }
-
-        issues.Add(new Issue(
-            Severity.Blocking,
-            "检测到 Windows 家庭版",
-            $"当前系统为家庭版（EditionID = {editionId}）。" + Environment.NewLine
-            + "桌面分身需要系统能够创建独立的 RDP 会话，官方要求非家庭版系统。"
-            + "家庭版通常无法建立该会话，表现为登录界面反复提示凭据无效，或等待一段时间后连接超时。"
-            + Environment.NewLine
-            + "不过也有部分家庭版系统可以正常使用，可以先继续尝试。"
-            + "如果确实无法连接，建议升级到 Windows 专业版，"
-            + "或改用 RDP Wrapper 实现本地远程多用户。"));
-    }
-
-    /// <summary>
     /// 检查远程桌面主机是否被关闭。组策略中的值会覆盖本机设置，因此优先读取组策略。
     /// </summary>
     private static void CollectRdpHostIssue(List<Issue> issues)
     {
-        // 组策略中的值会覆盖本机设置，因此优先读取组策略。
         var policyValue = ReadInt(
             RegistryHive.LocalMachine,
             TerminalServerPolicyRegistryPath,
@@ -169,7 +103,6 @@ internal static class ChildSessionEnvironmentCheck
               + "Restart-Service TermService -Force";
 
         issues.Add(new Issue(
-            Severity.Warning,
             "远程桌面主机已关闭",
             $"注册表 fDenyTSConnections = 1（{(policyValue is not null ? "组策略" : "本机设置")}），"
             + "本机 RDP 监听器不会启动，桌面分身可能无法建立会话。" + Environment.NewLine
@@ -191,31 +124,11 @@ internal static class ChildSessionEnvironmentCheck
         }
 
         issues.Add(new Issue(
-            Severity.Warning,
             "仅允许 Windows Hello 登录",
             "系统已开启「为了提高安全性，仅允许对此设备上的 Microsoft 帐户使用 Windows Hello 登录」，"
             + "此时 Microsoft 帐户在本机没有可用的密码凭据，桌面分身的登录会一直提示凭据无效，"
             + "无论输入什么密码都会失败。" + Environment.NewLine
             + "可在「设置 - 帐户 - 登录选项」中关闭该选项，然后注销并重新登录（部分情况需要重启系统）。"));
-    }
-
-    /// <summary>
-    /// 读取注册表字符串值。键或值不存在、无权限时返回 null。
-    /// </summary>
-    private static string? ReadString(RegistryHive hive, string path, string name)
-    {
-        try
-        {
-            using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
-            using var key = baseKey.OpenSubKey(path);
-            return key?.GetValue(name) as string;
-        }
-        catch (Exception exception) when (exception is SecurityException
-                                              or UnauthorizedAccessException
-                                              or IOException)
-        {
-            return null;
-        }
     }
 
     /// <summary>
