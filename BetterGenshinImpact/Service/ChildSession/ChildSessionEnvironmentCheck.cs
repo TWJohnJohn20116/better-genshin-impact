@@ -17,9 +17,15 @@ namespace BetterGenshinImpact.Service.ChildSession;
 /// </summary>
 internal static class ChildSessionEnvironmentCheck
 {
+    /// <summary>
+    /// 「仅允许 Windows Hello 登录」设置所在路径。
+    /// </summary>
     private const string PasswordLessRegistryPath =
         @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device";
 
+    /// <summary>
+    /// 远程桌面主机的本机设置所在路径。
+    /// </summary>
     private const string TerminalServerRegistryPath =
         @"SYSTEM\CurrentControlSet\Control\Terminal Server";
 
@@ -78,6 +84,7 @@ internal static class ChildSessionEnvironmentCheck
     /// </summary>
     private static void CollectRdpHostIssue(List<Issue> issues)
     {
+        // 组策略中的值会覆盖本机设置，因此优先读取组策略。
         var policyValue = ReadInt(
             RegistryHive.LocalMachine,
             TerminalServerPolicyRegistryPath,
